@@ -57,3 +57,6 @@ CONF_THRESHOLD = 0.60        # chỉ vẽ khung khi độ tin cậy >= ngưỡng
 NO_MONEY_CLASS = "000000"    # lớp "không có tiền" -> không vẽ khung
 GRADCAM_THRESHOLD = 0.40     # giữ vùng có activation >= 40% đỉnh để tạo khung
 BOX_SMOOTHING = 0.5          # làm mượt khung theo thời gian (0=không mượt, ->1 mượt hơn)
+PROCESS_EVERY = 3            # chạy Grad-CAM mỗi N frame (giảm lag); 1 = mỗi frame
+REFINE_BBOX = True           # tinh chỉnh cạnh khung bằng CV bên trong vùng Grad-CAM
+REFINE_ROI_EXPAND = 0.15     # nới vùng Grad-CAM ra ngoài trước khi dò cạnh (15%)

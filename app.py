@@ -81,6 +81,37 @@ def cam_to_bbox(cam, frame_shape, thresh):
     return cv2.boundingRect(biggest)  # (x, y, w, h)
 
 
+def refine_bbox(frame_bgr, cam_bbox, expand):
+    """Tinh chỉnh khung cho khớp cạnh tờ tiền bằng dò cạnh (Canny) BÊN TRONG
+    vùng Grad-CAM đã nới rộng.
+
+    Grad-CAM cho biết tờ tiền *ở đâu* (vùng thô 7x7), còn cạnh thật của tờ tiền
+    được dò bằng CV trong vùng đó để khung bám sát kích thước. Vì chỉ xét trong
+    vùng CAM nên tránh bắt nhầm nền. Nếu không tìm được, giữ nguyên khung CAM.
+    """
+    H, W = frame_bgr.shape[:2]
+    x, y, w, h = cam_bbox
+    ex, ey = int(w * expand), int(h * expand)
+    x0, y0 = max(0, x - ex), max(0, y - ey)
+    x1, y1 = min(W, x + w + ex), min(H, y + h + ey)
+    roi = frame_bgr[y0:y1, x0:x1]
+    if roi.size == 0:
+        return cam_bbox
+
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150)
+    edges = cv2.dilate(edges, np.ones((5, 5), np.uint8), iterations=2)
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return cam_bbox
+
+    bx, by, bw, bh = cv2.boundingRect(max(contours, key=cv2.contourArea))
+    # Chỉ nhận nếu vùng dò được đủ lớn so với ROI (tránh bám vào mẩu nhiễu nhỏ).
+    if bw * bh < 0.2 * roi.shape[0] * roi.shape[1]:
+        return cam_bbox
+    return (x0 + bx, y0 + by, bw, bh)
+
+
 def smooth_bbox(prev, cur, alpha):
     """Làm mượt bounding box theo thời gian (EMA) để khung đỡ giật."""
     if prev is None or cur is None:
@@ -125,33 +156,43 @@ def main():
     print("Đang chạy webcam... Nhấn 'q' để thoát.")
 
     smoothed_bbox = None
+    last_text = None          # nhãn của lần xử lý gần nhất (dùng lại giữa các frame)
+    frame_idx = 0
 
     while True:
         ok, frame = cap.read()
         if not ok:
             break
 
-        # Phân loại + Grad-CAM trên TOÀN khung hình. Cần gradient nên không no_grad.
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        x = infer_transform(Image.fromarray(rgb)).unsqueeze(0).to(device)
-        x.requires_grad_(True)
-        cam, idx, conf = gradcam.generate(x)
-        cls = class_dirs[idx]
+        frame = cv2.flip(frame, 1) # lật ngang cho đúng hướng gương
 
-        # Chỉ vẽ khung khi: có tiền (khác lớp 000000) và đủ tin cậy.
-        is_money = cls != config.NO_MONEY_CLASS and conf >= config.CONF_THRESHOLD
-        if is_money:
-            bbox = cam_to_bbox(cam, frame.shape, config.GRADCAM_THRESHOLD)
-            smoothed_bbox = smooth_bbox(smoothed_bbox, bbox, config.BOX_SMOOTHING)
-            if smoothed_bbox is not None:
-                label = config.LABELS_VI.get(cls, cls)
-                text = f"{label} ({conf*100:.0f}%)"
-                frame = draw_box_with_label(frame, smoothed_bbox, text,
-                                            (0, 220, 0), font)
-        else:
-            smoothed_bbox = None  # không có tiền -> bỏ khung
+        # Chỉ chạy Grad-CAM mỗi PROCESS_EVERY frame để giảm lag; các frame còn lại
+        # vẽ lại khung gần nhất nên hiển thị vẫn mượt theo tốc độ webcam.
+        if frame_idx % config.PROCESS_EVERY == 0:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            x = infer_transform(Image.fromarray(rgb)).unsqueeze(0).to(device)
+            x.requires_grad_(True)
+            cam, idx, conf = gradcam.generate(x)
+            cls = class_dirs[idx]
 
-        cv2.imshow("Nhan dien tien VND - nhan 'q' de thoat", frame)
+            is_money = cls != config.NO_MONEY_CLASS and conf >= config.CONF_THRESHOLD
+            if is_money:
+                bbox = cam_to_bbox(cam, frame.shape, config.GRADCAM_THRESHOLD)
+                if bbox is not None and config.REFINE_BBOX:
+                    bbox = refine_bbox(frame, bbox, config.REFINE_ROI_EXPAND)
+                smoothed_bbox = smooth_bbox(smoothed_bbox, bbox, config.BOX_SMOOTHING)
+                last_text = f"{config.LABELS_VI.get(cls, cls)} ({conf*100:.0f}%)"
+            else:
+                smoothed_bbox = None       # không có tiền -> bỏ khung
+                last_text = None
+        frame_idx += 1
+
+        # Vẽ khung gần nhất lên mọi frame (kể cả frame không xử lý).
+        if smoothed_bbox is not None and last_text is not None:
+            frame = draw_box_with_label(frame, smoothed_bbox, last_text,
+                                        (0, 220, 0), font)
+
+        cv2.imshow("VietNam Currency Detector", frame)
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
