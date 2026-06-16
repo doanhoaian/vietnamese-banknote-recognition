@@ -1,11 +1,8 @@
 """Giao diện desktop (PySide6) cho nhận diện tiền Việt Nam.
 
-Khác với app.py (vẽ HUD đè lên ảnh bằng OpenCV), file này dùng widget Qt thật:
-- Vùng video tự co giãn giữ tỉ lệ + letterbox khi resize cửa sổ.
-- Panel bên phải: trạng thái, mệnh giá, thanh tin cậy, "khả năng khác" — widget Qt gốc.
-- Nút Start/Stop, chọn camera, chụp ảnh.
+Khác app.py (vẽ HUD đè lên ảnh bằng OpenCV), file này dùng widget Qt: vùng
+video letterbox tự co giãn, panel trạng thái/mệnh giá/tin cậy, nút điều khiển.
 
-Cách dùng:
     python gui.py
 """
 import os
@@ -14,7 +11,6 @@ import time
 from datetime import datetime
 
 import cv2
-import torch
 from PIL import Image, ImageDraw, ImageFont
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
@@ -24,22 +20,25 @@ from PySide6.QtWidgets import (
 )
 
 import config
-from data import infer_transform
-from model import build_model
+from inference import CurrencyClassifier
+from utils import center_roi
 
-# Màu nhấn (hex) theo trạng thái.
 GREEN = "#34D058"
 AMBER = "#EF9F27"
 NEUTRAL = "#B4B8BF"
 PLACEHOLDER = "—"
+FRAME_INTERVAL_MS = 15
 
 
-def get_device():
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
+def _hex_to_rgb(hex_color: str):
+    h = hex_color.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _accent_for(pred):
+    if not pred.is_money:
+        return NEUTRAL
+    return GREEN if pred.is_confident else AMBER
 
 
 class CurrencyApp(QWidget):
@@ -49,40 +48,29 @@ class CurrencyApp(QWidget):
         self.resize(1100, 680)
         self.setStyleSheet("CurrencyApp{background:#0e1117;}")
 
-        self.device = get_device()
-        self.model, self.class_dirs = self._load_model()
+        self.clf = CurrencyClassifier()
         self.snap_font = self._load_snap_font()
 
         self.cap = None
         self.fps = 0.0
         self.prev_t = time.time()
-        self.last_frame = None       # khung gốc gần nhất (BGR) để chụp ảnh
-        self.last_text = ""          # nhãn dự đoán gần nhất
+        self.last_frame = None       # BGR, dùng cho _snapshot
+        self.last_text = ""
 
         self._build_ui()
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._update_frame)
 
-    # ---------- mô hình & font ----------
-    def _load_model(self):
-        ckpt = torch.load(config.MODEL_PATH, map_location=self.device)
-        model = build_model(num_classes=len(ckpt["class_dirs"]), pretrained=False)
-        model.load_state_dict(ckpt["model_state"])
-        model.to(self.device).eval()
-        return model, ckpt["class_dirs"]
-
     def _load_snap_font(self):
         path = next((p for p in config.FONT_CANDIDATES if os.path.exists(p)), None)
         return ImageFont.truetype(path, 30) if path else ImageFont.load_default()
 
-    # ---------- giao diện ----------
     def _build_ui(self):
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # Vùng video (trái), bọc trong lề để trông như "card".
         left = QWidget()
         ll = QVBoxLayout(left)
         ll.setContentsMargins(14, 14, 14, 14)
@@ -95,7 +83,6 @@ class CurrencyApp(QWidget):
         ll.addWidget(self.video)
         root.addWidget(left, stretch=1)
 
-        # Panel thông tin (phải).
         panel = QFrame()
         panel.setFixedWidth(320)
         panel.setStyleSheet("background:#161a22;")
@@ -107,7 +94,6 @@ class CurrencyApp(QWidget):
         title.setStyleSheet("color:#e8eaed; font-size:18px; font-weight:600;")
         pl.addWidget(title)
 
-        # Hàng trạng thái: chấm màu + chữ.
         srow = QHBoxLayout()
         srow.setSpacing(8)
         self.status_dot = QLabel()
@@ -123,7 +109,6 @@ class CurrencyApp(QWidget):
         self.lbl_denom.setStyleSheet(f"color:{NEUTRAL}; font-size:34px; font-weight:700;")
         pl.addWidget(self.lbl_denom)
 
-        # Thanh độ tin cậy + %.
         row_conf = QHBoxLayout()
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
@@ -155,13 +140,11 @@ class CurrencyApp(QWidget):
 
         pl.addStretch(1)
 
-        # Thông báo (vd đã lưu ảnh).
         self.lbl_msg = QLabel("")
         self.lbl_msg.setStyleSheet("color:#6b7280; font-size:12px;")
         self.lbl_msg.setWordWrap(True)
         pl.addWidget(self.lbl_msg)
 
-        # Chọn camera.
         self.combo = QComboBox()
         for i in range(3):
             self.combo.addItem(f"Camera {i}", i)
@@ -170,7 +153,6 @@ class CurrencyApp(QWidget):
             "border-radius:6px; padding:6px 10px; font-size:14px;}")
         pl.addWidget(self.combo)
 
-        # Nút chụp ảnh + Start/Stop.
         self.btn_snap = QPushButton("Chụp ảnh")
         self.btn_snap.setCursor(Qt.PointingHandCursor)
         self.btn_snap.setEnabled(False)
@@ -231,7 +213,6 @@ class CurrencyApp(QWidget):
             pct_lbl.setText("")
         self.lbl_fps.setText("")
 
-    # ---------- điều khiển camera ----------
     def _toggle(self):
         self._stop() if self.timer.isActive() else self._start()
 
@@ -248,7 +229,7 @@ class CurrencyApp(QWidget):
         self._set_status(running=True)
         self.lbl_msg.setText("")
         self.prev_t = time.time()
-        self.timer.start(15)
+        self.timer.start(FRAME_INTERVAL_MS)
 
     def _stop(self):
         self.timer.stop()
@@ -263,7 +244,6 @@ class CurrencyApp(QWidget):
         self._reset_panel()
         self.video.setText("Đã dừng. Nhấn Bắt đầu để mở lại.")
 
-    # ---------- vòng lặp xử lý ----------
     def _update_frame(self):
         ok, frame = self.cap.read()
         if not ok:
@@ -272,50 +252,44 @@ class CurrencyApp(QWidget):
         self.last_frame = frame
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        x = infer_transform(Image.fromarray(rgb)).unsqueeze(0).to(self.device)
-        with torch.no_grad():
-            probs = torch.softmax(self.model(x), dim=1)[0]
-        conf, idx = probs.max(0)
-        conf = conf.item()
-        cls = self.class_dirs[idx.item()]
 
-        # Mệnh giá + màu theo trạng thái.
-        if cls == config.NO_MONEY_CLASS:
-            label, accent = "Không có tiền", NEUTRAL
-        elif conf < config.CONF_THRESHOLD:
-            label, accent = "Không chắc chắn", AMBER
-        else:
-            label, accent = config.LABELS_VI.get(cls, cls), GREEN
-        self.last_text = f"{label} ({conf*100:.0f}%)"
+        # ROI giữa khung để thu hẹp domain gap với ảnh dataset (vốn crop sát tờ tiền).
+        roi = None
+        region = rgb
+        if config.ROI_RATIO is not None:
+            roi = center_roi(rgb.shape[1], rgb.shape[0], config.ROI_RATIO)
+            region = rgb[roi[1]:roi[3], roi[0]:roi[2]]
 
-        self.lbl_denom.setText(label)
+        pred = self.clf.predict(Image.fromarray(region), topk=4)
+        accent = _accent_for(pred)
+        conf = pred.confidence
+        self.last_text = f"{pred.label} ({conf*100:.0f}%)"
+
+        if roi is not None:
+            cv2.rectangle(rgb, roi[:2], roi[2:], _hex_to_rgb(accent), 2)
+
+        self.lbl_denom.setText(pred.label)
         self.lbl_denom.setStyleSheet(
             f"color:{accent}; font-size:34px; font-weight:700;")
         self.bar.setValue(int(conf * 100))
         self._set_bar_color(accent)
         self.lbl_pct.setText(f"{conf*100:.0f}%")
 
-        # "Khả năng khác": top 2-4 (bỏ dòng đứng đầu đã hiển thị bên trên).
-        top = torch.topk(probs, k=min(4, len(self.class_dirs)))
-        others = list(zip(top.values, top.indices))[1:4]
-        for (name_lbl, pct_lbl), (p, i) in zip(self.top_rows, others):
-            c = self.class_dirs[i.item()]
-            name_lbl.setText(config.LABELS_VI.get(c, c))
-            pct_lbl.setText(f"{p.item()*100:.0f}%")
+        for (name_lbl, pct_lbl), (name, prob) in zip(self.top_rows, pred.topk[1:4]):
+            name_lbl.setText(name)
+            pct_lbl.setText(f"{prob*100:.0f}%")
 
         now = time.time()
         self.fps = 0.9 * self.fps + 0.1 * (1.0 / max(now - self.prev_t, 1e-6))
         self.prev_t = now
         self.lbl_fps.setText(f"{self.fps:.0f} FPS")
 
-        # Letterbox giữ tỉ lệ theo kích thước label hiện tại.
         h, w, _ = rgb.shape
         qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888)
         pix = QPixmap.fromImage(qimg).scaled(
             self.video.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.video.setPixmap(pix)
 
-    # ---------- chụp ảnh ----------
     def _snapshot(self):
         if self.last_frame is None:
             return

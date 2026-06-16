@@ -3,50 +3,63 @@ import time
 
 import cv2
 import numpy as np
-import torch
 from PIL import Image, ImageDraw, ImageFont
 
 import config
-from data import infer_transform
-from model import build_model
+from inference import CurrencyClassifier
+from utils import center_roi
 
-PANEL = (0, 0, 0)            # Nền Panel
-COL_MUTED = (154, 163, 175)     # Chữ phụ
-COL_TEXT = (232, 234, 237)      # Chữ chính
-COL_GREEN = (52, 208, 88)       # Tự tin
-COL_AMBER = (239, 159, 39)      # Chưa chắc
-COL_NEUTRAL = (180, 184, 191)   # Không có tiền
+ESC_KEY = 27
 
-
-def load_model(device):
-    ckpt = torch.load(config.MODEL_PATH, map_location=device)
-    model = build_model(num_classes=len(ckpt["class_dirs"]), pretrained=False)
-    model.load_state_dict(ckpt["model_state"])
-    model.to(device).eval()
-    return model, ckpt["class_dirs"]
+PANEL = (0, 0, 0)
+COL_MUTED = (154, 163, 175)
+COL_TEXT = (232, 234, 237)
+COL_GREEN = (52, 208, 88)       # tự tin
+COL_AMBER = (239, 159, 39)      # chưa chắc
+COL_NEUTRAL = (180, 184, 191)   # không có tiền
 
 
 def build_fonts(scale):
-    """Tải font Unicode (tiếng Việt) ở nhiều cỡ, co giãn theo kích thước khung."""
     path = next((p for p in config.FONT_CANDIDATES if os.path.exists(p)), None)
+    if path is None:
+        print("Cảnh báo: không tìm thấy font Unicode, chữ có dấu có thể sai.")
 
     def f(size):
         sz = max(11, int(size * scale))
         return ImageFont.truetype(path, sz) if path else ImageFont.load_default()
 
-    if path is None:
-        print("Cảnh báo: không tìm thấy font Unicode, chữ có dấu có thể sai.")
     return {"title": f(22), "label": f(16), "big": f(58), "row": f(20), "hint": f(15)}
 
 
+def accent_for(pred):
+    if not pred.is_money:
+        return COL_NEUTRAL
+    return COL_GREEN if pred.is_confident else COL_AMBER
+
+
+def classify_roi(classifier, frame_bgr):
+    """Phân loại trong ROI giữa khung; trả về (Prediction, hộp ROI hoặc None)."""
+    h, w = frame_bgr.shape[:2]
+    rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    if config.ROI_RATIO is None:
+        return classifier.predict(Image.fromarray(rgb)), None
+    x1, y1, x2, y2 = center_roi(w, h, config.ROI_RATIO)
+    return classifier.predict(Image.fromarray(rgb[y1:y2, x1:x2])), (x1, y1, x2, y2)
+
+
+def draw_roi(frame_bgr, box, accent):
+    if box is None:
+        return
+    x1, y1, x2, y2 = box
+    cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), tuple(reversed(accent)), 2)
+
+
 def draw_hud(frame_bgr, label, conf, accent, top3, fps, fonts, scale):
-    """Vẽ giao diện HUD lên khung hình: thanh tiêu đề, panel mệnh giá + thanh
-    tin cậy, panel top-3, dòng hướng dẫn. Mọi kích thước co giãn theo `scale`.
-    """
+    """Vẽ HUD (tiêu đề, mệnh giá, độ tin cậy, top-3), mọi kích thước theo `scale`."""
     base = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)).convert("RGBA")
     W, H = base.size
 
-    def s(v):  # quy đổi giá trị px theo scale
+    def s(v):
         return int(v * scale)
 
     pad = s(18)
@@ -57,7 +70,6 @@ def draw_hud(frame_bgr, label, conf, accent, top3, fps, fonts, scale):
     main_w = int(W * 0.46)
     top_x = int(W * 0.66)
 
-    # Lớp panel bán trong suốt (đặc hơn để chữ dễ đọc).
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
     od = ImageDraw.Draw(overlay)
     od.rectangle([0, 0, W, title_h], fill=PANEL + (175,))
@@ -68,7 +80,6 @@ def draw_hud(frame_bgr, label, conf, accent, top3, fps, fonts, scale):
     base = Image.alpha_composite(base, overlay)
     d = ImageDraw.Draw(base)
 
-    # Thanh tiêu đề: tên (trái) - hướng dẫn (giữa) - FPS (phải), canh giữa dọc.
     def vcenter(font):
         asc, desc = font.getmetrics()
         return (title_h - (asc + desc)) // 2
@@ -84,12 +95,10 @@ def draw_hud(frame_bgr, label, conf, accent, top3, fps, fonts, scale):
     d.text((W - fw - pad, vcenter(fonts["label"])), fps_text,
            font=fonts["label"], fill=COL_MUTED)
 
-    # Panel mệnh giá.
     mx, my = pad + s(16), panel_top + s(16)
     d.text((mx, my), "Mệnh giá", font=fonts["label"], fill=COL_MUTED)
     d.text((mx, my + s(24)), label, font=fonts["big"], fill=accent)
 
-    # Thanh độ tin cậy.
     bar_h = s(10)
     bar_y = H - pad - s(34)
     bar_w = main_w - mx - s(72)
@@ -100,7 +109,6 @@ def draw_hud(frame_bgr, label, conf, accent, top3, fps, fonts, scale):
     d.text((mx + bar_w + s(10), bar_y - s(6)), f"{conf*100:.0f}%",
            font=fonts["row"], fill=COL_TEXT)
 
-    # Panel top-3.
     tx, ty = top_x + s(16), panel_top + s(16)
     d.text((tx, ty), "Top 3", font=fonts["label"], fill=COL_MUTED)
     for i, (name, p) in enumerate(top3):
@@ -119,8 +127,7 @@ def main():
         print(f"Chưa có model tại {config.MODEL_PATH}. Hãy chạy: python train.py")
         return
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, class_dirs = load_model(device)
+    classifier = CurrencyClassifier()
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -136,44 +143,25 @@ def main():
         ok, frame = cap.read()
         if not ok:
             break
+        frame = cv2.flip(frame, 1)
 
-        frame = cv2.flip(frame, 1)  # lật ngang cho đúng hướng gương
-
-        # Tính scale + dựng font một lần theo kích thước khung (chuẩn theo 720p).
         if fonts is None:
             scale = frame.shape[0] / 720.0
             fonts = build_fonts(scale)
 
-        # Phân loại trên toàn khung hình.
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        x = infer_transform(Image.fromarray(rgb)).unsqueeze(0).to(device)
-        with torch.no_grad():
-            probs = torch.softmax(model(x), dim=1)[0]
-        conf, idx = probs.max(0)
-        conf = conf.item()
-        cls = class_dirs[idx.item()]
-        label = config.LABELS_VI.get(cls, cls)
+        pred, roi = classify_roi(classifier, frame)
+        accent = accent_for(pred)
 
-        # Top-3 dự đoán.
-        top = torch.topk(probs, k=min(3, len(class_dirs)))
-        top3 = [(config.LABELS_VI.get(class_dirs[i.item()], class_dirs[i.item()]),
-                 p.item()) for p, i in zip(top.values, top.indices)]
-
-        # Màu nhấn theo trạng thái.
-        if cls == config.NO_MONEY_CLASS:
-            accent = COL_NEUTRAL
-        else:
-            accent = COL_GREEN if conf >= config.CONF_THRESHOLD else COL_AMBER
-
-        # Ước lượng FPS (làm mượt).
         now = time.time()
         fps = 0.9 * fps + 0.1 * (1.0 / max(now - prev_t, 1e-6))
         prev_t = now
 
-        frame = draw_hud(frame, label, conf, accent, top3, fps, fonts, scale)
+        draw_roi(frame, roi, accent)
+        frame = draw_hud(frame, pred.label, pred.confidence, accent,
+                         pred.topk, fps, fonts, scale)
         cv2.imshow("VietNam Currency Detector", frame)
 
-        if cv2.waitKey(1) & 0xFF == 27:  # 27 = phím Esc
+        if cv2.waitKey(1) & 0xFF == ESC_KEY:
             break
 
     cap.release()

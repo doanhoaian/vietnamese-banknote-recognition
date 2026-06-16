@@ -25,18 +25,45 @@ LABELS_VI = {
     "500000": "500.000 đ",
 }
 
-IMAGE_SIZE = 224          # MobileNetV2 pretrained ~224x224
-BATCH_SIZE = 32
-EPOCHS = 15
-LEARNING_RATE = 1e-3
-WEIGHT_DECAY = 1e-4
-VAL_RATIO = 0.15          # 15% Validation
-TEST_RATIO = 0.15         # 15% Test  -> 70% Train
+# --- Dữ liệu ---
+IMAGE_SIZE = 224                 # MobileNetV2 pretrained ~224x224
+VAL_RATIO = 0.15
+TEST_RATIO = 0.15                # -> 70% train
+NUM_WORKERS = 2
 SEED = 42
 
-# Chuẩn hoá theo ImageNet
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
+
+# --- Huấn luyện ---
+BATCH_SIZE = 32
+EPOCHS = 30
+WEIGHT_DECAY = 1e-4
+USE_CLASS_WEIGHTS = True
+
+# Fine-tuning: đóng băng backbone nhưng mở N block cuối với LR thấp hơn head.
+FREEZE_BACKBONE = True
+UNFREEZE_LAST_N_BLOCKS = 3
+HEAD_LR = 1e-3
+BACKBONE_LR = 1e-4
+
+# Scheduler (ReduceLROnPlateau theo val accuracy).
+LR_FACTOR = 0.5
+LR_PATIENCE = 2
+
+# Early stopping theo val accuracy.
+EARLY_STOPPING_PATIENCE = 6
+EARLY_STOPPING_MIN_DELTA = 1e-4
+
+# --- Suy luận / hiển thị ---
+CONF_THRESHOLD = 0.60
+NO_MONEY_CLASS = "000000"
+UNCERTAIN_LABEL = "Không chắc chắn"
+
+# Vùng quan tâm (ROI) cho luồng webcam: chỉ phân loại ô vuông giữa khung để
+# giảm domain gap so với ảnh dataset (vốn được crop sát tờ tiền).
+# Tỉ lệ cạnh ROI so với cạnh nhỏ của khung hình; đặt None để dùng toàn khung.
+ROI_RATIO = 0.6
 
 FONT_CANDIDATES = [
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
@@ -45,5 +72,3 @@ FONT_CANDIDATES = [
     "C:/Windows/Fonts/arial.ttf",
 ]
 FONT_SIZE = 32
-CONF_THRESHOLD = 0.60
-NO_MONEY_CLASS = "000000"
