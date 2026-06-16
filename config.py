@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent
-DATASET_DIR = ROOT_DIR.parent / "dataset"
+DATASET_DIR = ROOT_DIR / "dataset"
 OUTPUT_DIR = ROOT_DIR / "outputs"
 MODEL_PATH = OUTPUT_DIR / "currency_model.pt"
 
