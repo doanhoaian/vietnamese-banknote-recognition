@@ -45,7 +45,6 @@ def main():
     label, conf, probs = predict_image(sys.argv[1], model, class_dirs, device)
     print(f"\n=> Dự đoán: {label}  (độ tin cậy {conf*100:.1f}%)\n")
 
-    # In top-3 cho minh bạch.
     top = torch.topk(probs, k=min(3, len(class_dirs)))
     print("Top dự đoán:")
     for p, i in zip(top.values, top.indices):

@@ -11,7 +11,7 @@ from model import build_model
 def get_device():
     if torch.cuda.is_available():
         return torch.device("cuda")
-    if torch.backends.mps.is_available():   # Mac Apple Silicon
+    if torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
 
@@ -68,7 +68,6 @@ def main():
     model = build_model().to(device)
 
     criterion = nn.CrossEntropyLoss()
-    # Chỉ tối ưu các tham số được mở (head phân loại).
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.Adam(params, lr=config.LEARNING_RATE,
                                  weight_decay=config.WEIGHT_DECAY)
@@ -98,7 +97,6 @@ def main():
             }, config.MODEL_PATH)
             print(f"  ↳ Lưu model tốt nhất (val acc={va_acc:.3f}) -> {config.MODEL_PATH}")
 
-    # Đánh giá trên tập test bằng model tốt nhất.
     ckpt = torch.load(config.MODEL_PATH, map_location=device)
     model.load_state_dict(ckpt["model_state"])
     te_loss, te_acc = run_epoch(model, test_loader, criterion, optimizer, device, False)

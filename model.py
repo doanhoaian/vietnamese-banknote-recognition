@@ -13,11 +13,9 @@ def build_model(num_classes: int = None, pretrained: bool = True):
     weights = models.MobileNet_V2_Weights.IMAGENET1K_V1 if pretrained else None
     net = models.mobilenet_v2(weights=weights)
 
-    # Đóng băng toàn bộ backbone để train nhanh, chống overfit với dataset nhỏ.
     for p in net.features.parameters():
         p.requires_grad = False
 
-    # Thay head phân loại.
     in_features = net.classifier[1].in_features
     net.classifier = nn.Sequential(
         nn.Dropout(0.3),

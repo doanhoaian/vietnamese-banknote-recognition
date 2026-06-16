@@ -12,7 +12,7 @@ import config
 
 def _list_samples():
     """Quét DATASET_DIR, trả về danh sách (đường_dẫn_ảnh, chỉ_số_lớp) cho mỗi lớp."""
-    per_class = {}  # class_idx -> [paths]
+    per_class = {}
     for idx, cls in enumerate(config.CLASS_DIRS):
         folder = config.DATASET_DIR / cls
         if not folder.is_dir():
@@ -63,8 +63,6 @@ class CurrencyDataset(Dataset):
 def _build_transforms(train: bool):
     norm = transforms.Normalize(config.IMAGENET_MEAN, config.IMAGENET_STD)
     if train:
-        # Augmentation nhẹ: ảnh là tiền cầm tay trước webcam nên không lật dọc,
-        # tránh xoay/đảo mạnh có thể làm sai mệnh giá.
         return transforms.Compose([
             transforms.Resize((config.IMAGE_SIZE, config.IMAGE_SIZE)),
             transforms.RandomRotation(8),
@@ -80,7 +78,6 @@ def _build_transforms(train: bool):
     ])
 
 
-# Dùng lại cho predict.py / webcam_demo.py (transform suy luận)
 infer_transform = _build_transforms(train=False)
 
 
