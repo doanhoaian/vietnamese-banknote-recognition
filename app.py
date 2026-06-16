@@ -34,6 +34,12 @@ def _accent_for(pred):
     return GREEN if pred.is_confident else AMBER
 
 
+def _open_camera(cam_id: int):
+    if sys.platform == "win32":
+        return cv2.VideoCapture(cam_id, cv2.CAP_DSHOW)
+    return cv2.VideoCapture(cam_id)
+
+
 class CurrencyApp(QWidget):
     def __init__(self):
         super().__init__()
@@ -211,7 +217,7 @@ class CurrencyApp(QWidget):
 
     def _start(self):
         cam_id = self.combo.currentData()
-        self.cap = cv2.VideoCapture(cam_id)
+        self.cap = _open_camera(cam_id)
         if not self.cap.isOpened():
             self.video.setText(f"Không mở được Camera {cam_id}")
             self.cap = None
