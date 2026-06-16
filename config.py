@@ -1,4 +1,3 @@
-"""Cấu hình tập trung cho toàn bộ dự án nhận diện tiền Việt Nam."""
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent
@@ -39,24 +38,11 @@ SEED = 42
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
-# --- Hiển thị (app.py) ---
-# Danh sách font TrueType hỗ trợ tiếng Việt, thử lần lượt cho tới khi tìm thấy.
-# OpenCV không vẽ được dấu tiếng Việt, nên app.py dùng PIL + font này.
 FONT_CANDIDATES = [
-    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",  # macOS
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
     "/Library/Fonts/Arial Unicode.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",        # Linux
-    "C:/Windows/Fonts/arial.ttf",                              # Windows
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "C:/Windows/Fonts/arial.ttf",
 ]
 FONT_SIZE = 32
-
-# --- Định vị tờ tiền bằng Grad-CAM (app.py) ---
-# Khung được suy ra từ vùng model chú ý nhất (lớp conv cuối MobileNetV2),
-# nên bám đúng cái model dùng để đọc mệnh giá thay vì dựa vào màu sắc.
-CONF_THRESHOLD = 0.60        # chỉ vẽ khung khi độ tin cậy >= ngưỡng này
-NO_MONEY_CLASS = "000000"    # lớp "không có tiền" -> không vẽ khung
-GRADCAM_THRESHOLD = 0.40     # giữ vùng có activation >= 40% đỉnh để tạo khung
-BOX_SMOOTHING = 0.5          # làm mượt khung theo thời gian (0=không mượt, ->1 mượt hơn)
-PROCESS_EVERY = 3            # chạy Grad-CAM mỗi N frame (giảm lag); 1 = mỗi frame
-REFINE_BBOX = True           # tinh chỉnh cạnh khung bằng CV bên trong vùng Grad-CAM
-REFINE_ROI_EXPAND = 0.15     # nới vùng Grad-CAM ra ngoài trước khi dò cạnh (15%)
+CONF_THRESHOLD = 0.60

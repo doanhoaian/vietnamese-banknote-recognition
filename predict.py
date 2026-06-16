@@ -1,8 +1,3 @@
-"""Dự đoán mệnh giá tiền từ MỘT ảnh.
-
-Cách dùng:
-    python predict.py đường_dẫn_ảnh.png
-"""
 import sys
 
 import torch

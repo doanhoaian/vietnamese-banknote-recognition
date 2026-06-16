@@ -1,4 +1,3 @@
-"""Xây dựng mô hình transfer learning dựa trên MobileNetV2 pretrained ImageNet."""
 import torch.nn as nn
 from torchvision import models
 
@@ -6,7 +5,6 @@ import config
 
 
 def build_model(num_classes: int = None, pretrained: bool = True):
-    """MobileNetV2: đóng băng backbone, thay lớp phân loại cuối cho 12 mệnh giá."""
     if num_classes is None:
         num_classes = len(config.CLASS_DIRS)
 

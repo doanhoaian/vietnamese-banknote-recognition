@@ -1,4 +1,3 @@
-"""Tải dữ liệu ảnh, chia train/val/test theo lớp (stratified) và tạo DataLoader."""
 import random
 from pathlib import Path
 
@@ -11,7 +10,6 @@ import config
 
 
 def _list_samples():
-    """Quét DATASET_DIR, trả về danh sách (đường_dẫn_ảnh, chỉ_số_lớp) cho mỗi lớp."""
     per_class = {}
     for idx, cls in enumerate(config.CLASS_DIRS):
         folder = config.DATASET_DIR / cls
@@ -25,7 +23,6 @@ def _list_samples():
 
 
 def _stratified_split(per_class, val_ratio, test_ratio, seed):
-    """Chia đều theo từng lớp để mọi tập đều có đủ 12 mệnh giá."""
     rng = random.Random(seed)
     train, val, test = [], [], []
     for idx, paths in per_class.items():
@@ -82,7 +79,6 @@ infer_transform = _build_transforms(train=False)
 
 
 def get_dataloaders():
-    """Trả về (train_loader, val_loader, test_loader) đã chia stratified."""
     per_class = _list_samples()
     train_s, val_s, test_s = _stratified_split(
         per_class, config.VAL_RATIO, config.TEST_RATIO, config.SEED
