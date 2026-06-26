@@ -252,11 +252,11 @@ class CurrencyApp(QWidget):
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # ROI giữa khung để thu hẹp domain gap với ảnh dataset (vốn crop sát tờ tiền).
         roi = None
         region = rgb
         if config.ROI_RATIO is not None:
-            roi = center_roi(rgb.shape[1], rgb.shape[0], config.ROI_RATIO)
+            roi = center_roi(rgb.shape[1], rgb.shape[0], config.ROI_RATIO,
+                             getattr(config, "ROI_ASPECT", 1.0))
             region = rgb[roi[1]:roi[3], roi[0]:roi[2]]
 
         pred = self.clf.predict(Image.fromarray(region), topk=4)

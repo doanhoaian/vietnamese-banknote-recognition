@@ -6,14 +6,12 @@ OUTPUT_DIR = ROOT_DIR / "outputs"
 MODEL_PATH = OUTPUT_DIR / "currency_model.pt"
 
 CLASS_DIRS = [
-    "000000", "000200", "000500", "001000", "002000", "005000",
+    "000000", "001000", "002000", "005000",
     "010000", "020000", "050000", "100000", "200000", "500000",
 ]
 
 LABELS_VI = {
     "000000": "Không có tiền",
-    "000200": "200 đ",
-    "000500": "500 đ",
     "001000": "1.000 đ",
     "002000": "2.000 đ",
     "005000": "5.000 đ",
@@ -60,10 +58,9 @@ CONF_THRESHOLD = 0.60
 NO_MONEY_CLASS = "000000"
 UNCERTAIN_LABEL = "Không chắc chắn"
 
-# Vùng quan tâm (ROI) cho luồng webcam: chỉ phân loại ô vuông giữa khung để
-# giảm domain gap so với ảnh dataset (vốn được crop sát tờ tiền).
-# Tỉ lệ cạnh ROI so với cạnh nhỏ của khung hình; đặt None để dùng toàn khung.
+# Vùng quan tâm (ROI)
 ROI_RATIO = 0.6
+ROI_ASPECT = 2.2
 
 FONT_CANDIDATES = [
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",

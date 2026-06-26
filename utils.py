@@ -27,9 +27,15 @@ def seed_worker(_worker_id: int) -> None:
     random.seed(worker_seed)
 
 
-def center_roi(width: int, height: int, ratio: float) -> tuple[int, int, int, int]:
-    """Ô vuông căn giữa khung, cạnh = ratio * cạnh nhỏ. Trả về (x1, y1, x2, y2)."""
-    side = int(min(width, height) * ratio)
-    x1 = (width - side) // 2
-    y1 = (height - side) // 2
-    return x1, y1, x1 + side, y1 + side
+def center_roi(width: int, height: int, ratio: float,
+               aspect: float = 1.0) -> tuple[int, int, int, int]:
+
+    box_h = int(height * ratio)
+    box_w = int(box_h * aspect)
+    max_w = int(width * 0.95)
+    if box_w > max_w:
+        box_w = max_w
+        box_h = int(box_w / aspect)
+    x1 = (width - box_w) // 2
+    y1 = (height - box_h) // 2
+    return x1, y1, x1 + box_w, y1 + box_h
