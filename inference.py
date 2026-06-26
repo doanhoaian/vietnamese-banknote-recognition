@@ -11,12 +11,12 @@ from utils import get_device
 
 @dataclass
 class Prediction:
-    cls: str                       # mã lớp gốc, vd "050000"
-    label: str                     # nhãn hiển thị sau khi áp ngưỡng
+    cls: str                  
+    label: str                
     confidence: float
     is_money: bool
     is_confident: bool
-    topk: list                     # [(label, prob), ...] theo xác suất giảm dần
+    topk: list                
 
 
 def load_checkpoint(device: torch.device, model_path=None):
@@ -34,11 +34,16 @@ class CurrencyClassifier:
         self.model, self.class_dirs = load_checkpoint(self.device, model_path)
 
     @torch.no_grad()
-    def predict(self, image: Image.Image, topk: int = 3) -> Prediction:
+    def predict_probs(self, image: Image.Image) -> torch.Tensor:
         x = infer_transform(image).unsqueeze(0).to(self.device)
-        probs = torch.softmax(self.model(x), dim=1)[0]
+        return torch.softmax(self.model(x), dim=1)[0]
+
+    def resolve(self, probs: torch.Tensor, topk: int = 3) -> Prediction:
         conf, idx = probs.max(0)
         return self._resolve(self.class_dirs[idx.item()], conf.item(), probs, topk)
+
+    def predict(self, image: Image.Image, topk: int = 3) -> Prediction:
+        return self.resolve(self.predict_probs(image), topk)
 
     def _resolve(self, cls, conf, probs, topk) -> Prediction:
         is_money = cls != config.NO_MONEY_CLASS

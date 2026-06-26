@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+from collections import deque
 from datetime import datetime
 
 import cv2
@@ -21,6 +22,7 @@ AMBER = "#EF9F27"
 NEUTRAL = "#B4B8BF"
 PLACEHOLDER = "—"
 FRAME_INTERVAL_MS = 15
+SMOOTH_WINDOW = 8                # số frame gần nhất để trung bình xác suất
 
 
 def _hex_to_rgb(hex_color: str):
@@ -55,6 +57,7 @@ class CurrencyApp(QWidget):
         self.prev_t = time.time()
         self.last_frame = None       # BGR, dùng cho _snapshot
         self.last_text = ""
+        self.prob_history = deque(maxlen=SMOOTH_WINDOW)   # xác suất các frame gần nhất
 
         self._build_ui()
 
@@ -222,6 +225,7 @@ class CurrencyApp(QWidget):
             self.video.setText(f"Không mở được Camera {cam_id}")
             self.cap = None
             return
+        self.prob_history.clear()
         self.combo.setEnabled(False)
         self.btn_snap.setEnabled(True)
         self._style_button(start=False)
@@ -259,7 +263,10 @@ class CurrencyApp(QWidget):
                              getattr(config, "ROI_ASPECT", 1.0))
             region = rgb[roi[1]:roi[3], roi[0]:roi[2]]
 
-        pred = self.clf.predict(Image.fromarray(region), topk=4)
+        probs = self.clf.predict_probs(Image.fromarray(region))
+        self.prob_history.append(probs)
+        avg_probs = sum(self.prob_history) / len(self.prob_history)
+        pred = self.clf.resolve(avg_probs, topk=4)
         accent = _accent_for(pred)
         conf = pred.confidence
         self.last_text = f"{pred.label} ({conf*100:.0f}%)"
