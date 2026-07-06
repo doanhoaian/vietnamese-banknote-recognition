@@ -1,28 +1,35 @@
-import os
 import sys
 import time
-from collections import deque
-from datetime import datetime
 
 import cv2
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFrame, QHBoxLayout, QLabel, QProgressBar,
-    QPushButton, QVBoxLayout, QWidget,
+    QApplication, QGridLayout, QLabel, QVBoxLayout, QWidget,
 )
 
 import config
+import speech
 from inference import CurrencyClassifier
 from utils import center_roi
 
-GREEN = "#34D058"
-AMBER = "#EF9F27"
-NEUTRAL = "#B4B8BF"
-PLACEHOLDER = "—"
+# Màu theo trạng thái
+GREEN = "#34D058"      # chắc chắn
+AMBER = "#EF9F27"      # đang nhận diện / chưa chắc
+NEUTRAL = "#8b93a1"    # trung tính (đang tìm)
+BG = "#0e1117"
+
 FRAME_INTERVAL_MS = 15
-SMOOTH_WINDOW = 8                # số frame gần nhất để trung bình xác suất
+SMOOTH_WINDOW = 8
+SCAN_INTERVAL_MS = 16
+SCAN_DURATION_MS = 1100
+
+# Các trạng thái của luồng trải nghiệm
+SEARCHING = "SEARCHING"    # chưa thấy tiền
+GUIDING = "GUIDING"        # thấy tiền, đang canh/giữ yên
+SCANNING = "SCANNING"      # đóng băng + animation quét
+RESULT = "RESULT"          # hiện & đọc kết quả
 
 
 def _hex_to_rgb(hex_color: str):
@@ -43,217 +50,122 @@ def _open_camera(cam_id: int):
 
 
 class CurrencyApp(QWidget):
-    def __init__(self):
+    def __init__(self, cam_id: int = 0):
         super().__init__()
         self.setWindowTitle("Nhận diện tiền Việt Nam")
-        self.resize(1100, 680)
-        self.setStyleSheet("CurrencyApp{background:#0e1117;}")
+        self.resize(1000, 640)
+        self.setStyleSheet(f"CurrencyApp{{background:{BG};}}")
 
+        self.cam_id = cam_id
         self.clf = CurrencyClassifier()
-        self.snap_font = self._load_snap_font()
+        self.speaker = speech.Speaker(config.VOICE_NAME, config.VOICE_RATE)
 
         self.cap = None
-        self.fps = 0.0
-        self.prev_t = time.time()
-        self.last_frame = None       # BGR, dùng cho _snapshot
-        self.last_text = ""
-        self.prob_history = deque(maxlen=SMOOTH_WINDOW)   # xác suất các frame gần nhất
+        self.prob_history = []          # xác suất các frame gần nhất (làm mượt)
+
+        # Máy trạng thái + chọn frame tốt nhất
+        self.state = SEARCHING
+        self.stable_cls = None
+        self.stable_streak = 0
+        self.best = None                # {score, rgb, roi, pred}
+        self.captured_cls = None
+        self.absent = 0
+        self.last_guide_t = 0.0
+        self.last_result_speech = ""    # để đọc lại khi chạm màn hình
+
+        # Animation quét
+        self.scan_rgb = None
+        self.scan_roi = None
+        self.scan_pred = None
+        self.scan_progress = 0.0
+        self.scan_speed = SCAN_INTERVAL_MS / SCAN_DURATION_MS
+        self.anim_timer = QTimer(self)
+        self.anim_timer.timeout.connect(self._scan_step)
 
         self._build_ui()
-
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._update_frame)
 
-    def _load_snap_font(self):
-        path = next((p for p in config.FONT_CANDIDATES if os.path.exists(p)), None)
-        return ImageFont.truetype(path, 30) if path else ImageFont.load_default()
+        # Tự khởi động camera + chào ngay khi mở app.
+        QTimer.singleShot(0, self._start)
+
+    # ---------------- Giao diện ----------------
 
     def _build_ui(self):
-        root = QHBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        grid = QGridLayout(self)
+        grid.setContentsMargins(0, 0, 0, 0)
 
-        left = QWidget()
-        ll = QVBoxLayout(left)
-        ll.setContentsMargins(14, 14, 14, 14)
-        self.video = QLabel("Nhấn Bắt đầu để mở camera")
+        self.video = QLabel()
         self.video.setAlignment(Qt.AlignCenter)
-        self.video.setMinimumSize(480, 360)
-        self.video.setStyleSheet(
-            "background:#000; color:#6b7280; font-size:15px;"
-            "border:1px solid #222834; border-radius:12px;")
-        ll.addWidget(self.video)
-        root.addWidget(left, stretch=1)
+        self.video.setAttribute(Qt.WA_TransparentForMouseEvents)
+        grid.addWidget(self.video, 0, 0)
 
-        panel = QFrame()
-        panel.setFixedWidth(320)
-        panel.setStyleSheet("background:#161a22;")
-        pl = QVBoxLayout(panel)
-        pl.setContentsMargins(20, 22, 20, 22)
-        pl.setSpacing(14)
+        overlay = QWidget()
+        overlay.setAttribute(Qt.WA_TransparentForMouseEvents)
+        overlay.setStyleSheet("background:transparent;")
+        ov = QVBoxLayout(overlay)
+        ov.setContentsMargins(40, 30, 40, 34)
 
-        title = QLabel("Tiền Việt Nam")
-        title.setStyleSheet("color:#e8eaed; font-size:18px; font-weight:600;")
-        pl.addWidget(title)
+        self.status_lbl = QLabel()
+        self.status_lbl.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        self.status_lbl.setStyleSheet(
+            "color:#c4c9d1; font-size:16px; letter-spacing:2px;"
+            "background:rgba(0,0,0,90); border-radius:12px; padding:6px 14px;")
+        ov.addWidget(self.status_lbl, alignment=Qt.AlignHCenter)
 
-        srow = QHBoxLayout()
-        srow.setSpacing(8)
-        self.status_dot = QLabel()
-        self.status_dot.setFixedSize(10, 10)
-        self.status_text = QLabel()
-        self.status_text.setStyleSheet("color:#9aa3af; font-size:13px;")
-        srow.addWidget(self.status_dot)
-        srow.addWidget(self.status_text, stretch=1)
-        pl.addLayout(srow)
+        ov.addStretch(1)
+        self.big_lbl = QLabel()
+        self.big_lbl.setAlignment(Qt.AlignCenter)
+        self.big_lbl.setWordWrap(True)
+        ov.addWidget(self.big_lbl)
 
-        pl.addWidget(self._caption("MỆNH GIÁ"))
-        self.lbl_denom = QLabel(PLACEHOLDER)
-        self.lbl_denom.setStyleSheet(f"color:{NEUTRAL}; font-size:34px; font-weight:700;")
-        pl.addWidget(self.lbl_denom)
+        self.sub_lbl = QLabel()
+        self.sub_lbl.setAlignment(Qt.AlignCenter)
+        self.sub_lbl.setStyleSheet("color:#e8eaed; font-size:22px;")
+        ov.addWidget(self.sub_lbl)
+        ov.addStretch(1)
 
-        row_conf = QHBoxLayout()
-        self.bar = QProgressBar()
-        self.bar.setRange(0, 100)
-        self.bar.setTextVisible(False)
-        self.bar.setFixedHeight(10)
-        self._set_bar_color(NEUTRAL)
-        row_conf.addWidget(self.bar, stretch=1)
-        self.lbl_pct = QLabel("0%")
-        self.lbl_pct.setStyleSheet("color:#e8eaed; font-size:14px;")
-        self.lbl_pct.setFixedWidth(44)
-        self.lbl_pct.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        row_conf.addWidget(self.lbl_pct)
-        pl.addLayout(row_conf)
+        self.hint_lbl = QLabel("Chạm màn hình để nghe lại · Esc để thoát")
+        self.hint_lbl.setAlignment(Qt.AlignHCenter | Qt.AlignBottom)
+        self.hint_lbl.setStyleSheet("color:#6b7280; font-size:14px;")
+        ov.addWidget(self.hint_lbl, alignment=Qt.AlignHCenter)
 
-        pl.addSpacing(8)
-        pl.addWidget(self._caption("KHẢ NĂNG KHÁC"))
-        self.top_rows = []
-        for _ in range(3):
-            r = QHBoxLayout()
-            name = QLabel(PLACEHOLDER)
-            name.setStyleSheet("color:#c4c9d1; font-size:14px;")
-            pct = QLabel("")
-            pct.setStyleSheet("color:#9aa3af; font-size:14px;")
-            pct.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            r.addWidget(name, stretch=1)
-            r.addWidget(pct)
-            pl.addLayout(r)
-            self.top_rows.append((name, pct))
+        grid.addWidget(overlay, 0, 0)
 
-        pl.addStretch(1)
+    def _set_overlay(self, status, big, sub, color):
+        self.status_lbl.setText(status)
+        self.big_lbl.setText(big)
+        self.big_lbl.setStyleSheet(
+            f"color:{color}; font-size:64px; font-weight:800;")
+        self.sub_lbl.setText(sub)
 
-        self.lbl_msg = QLabel("")
-        self.lbl_msg.setStyleSheet("color:#6b7280; font-size:12px;")
-        self.lbl_msg.setWordWrap(True)
-        pl.addWidget(self.lbl_msg)
+    def _show_rgb(self, rgb):
+        h, w, _ = rgb.shape
+        qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888)
+        pix = QPixmap.fromImage(qimg).scaled(
+            self.video.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.video.setPixmap(pix)
 
-        self.combo = QComboBox()
-        for i in range(3):
-            self.combo.addItem(f"Camera {i}", i)
-        self.combo.setStyleSheet(
-            "QComboBox{background:#222834; color:#e8eaed; border:1px solid #333a47;"
-            "border-radius:6px; padding:6px 10px; font-size:14px;}")
-        pl.addWidget(self.combo)
-
-        self.btn_snap = QPushButton("Chụp ảnh")
-        self.btn_snap.setCursor(Qt.PointingHandCursor)
-        self.btn_snap.setEnabled(False)
-        self.btn_snap.setStyleSheet(
-            "QPushButton{background:#222834; color:#e8eaed; border:1px solid #333a47;"
-            "border-radius:8px; padding:9px; font-size:14px;}"
-            "QPushButton:hover{background:#2a313f;}"
-            "QPushButton:disabled{color:#555b66; border-color:#262c38;}")
-        self.btn_snap.clicked.connect(self._snapshot)
-        pl.addWidget(self.btn_snap)
-
-        self.btn = QPushButton("Bắt đầu")
-        self.btn.setCursor(Qt.PointingHandCursor)
-        self._style_button(start=True)
-        self.btn.clicked.connect(self._toggle)
-        pl.addWidget(self.btn)
-
-        self.lbl_fps = QLabel("")
-        self.lbl_fps.setStyleSheet("color:#6b7280; font-size:12px;")
-        self.lbl_fps.setAlignment(Qt.AlignRight)
-        pl.addWidget(self.lbl_fps)
-
-        root.addWidget(panel)
-        self._set_status(running=False)
-
-    def _caption(self, text):
-        lbl = QLabel(text)
-        lbl.setStyleSheet("color:#9aa3af; font-size:11px; letter-spacing:1px;")
-        return lbl
-
-    def _set_bar_color(self, hex_color):
-        self.bar.setStyleSheet(
-            "QProgressBar{background:#2a2f3a; border:none; border-radius:5px;}"
-            f"QProgressBar::chunk{{background:{hex_color}; border-radius:5px;}}")
-
-    def _style_button(self, start: bool):
-        color, hover = ("#2563eb", "#1d4ed8") if start else ("#a33636", "#8f2d2d")
-        self.btn.setText("Bắt đầu" if start else "Dừng")
-        self.btn.setStyleSheet(
-            f"QPushButton{{background:{color}; color:white; border:none;"
-            "border-radius:8px; padding:11px; font-size:15px; font-weight:600;}"
-            f"QPushButton:hover{{background:{hover};}}")
-
-    def _set_status(self, running: bool):
-        color = GREEN if running else "#5f6672"
-        text = "Đang nhận diện" if running else "Đã dừng"
-        self.status_dot.setStyleSheet(f"background:{color}; border-radius:5px;")
-        self.status_text.setText(text)
-
-    def _reset_panel(self):
-        self.lbl_denom.setText(PLACEHOLDER)
-        self.lbl_denom.setStyleSheet(f"color:{NEUTRAL}; font-size:34px; font-weight:700;")
-        self.bar.setValue(0)
-        self._set_bar_color(NEUTRAL)
-        self.lbl_pct.setText("")
-        for name_lbl, pct_lbl in self.top_rows:
-            name_lbl.setText(PLACEHOLDER)
-            pct_lbl.setText("")
-        self.lbl_fps.setText("")
-
-    def _toggle(self):
-        self._stop() if self.timer.isActive() else self._start()
+    # ---------------- Camera ----------------
 
     def _start(self):
-        cam_id = self.combo.currentData()
-        self.cap = _open_camera(cam_id)
+        self.cap = _open_camera(self.cam_id)
         if not self.cap.isOpened():
-            self.video.setText(f"Không mở được Camera {cam_id}")
             self.cap = None
+            self._set_overlay("LỖI", "Không mở\nđược camera", "", AMBER)
+            self.speaker.speak(config.SPEECH_NO_CAMERA, interrupt=True)
             return
         self.prob_history.clear()
-        self.combo.setEnabled(False)
-        self.btn_snap.setEnabled(True)
-        self._style_button(start=False)
-        self._set_status(running=True)
-        self.lbl_msg.setText("")
-        self.prev_t = time.time()
+        self._reset_capture()
+        self._render_searching()
+        self.speaker.speak(config.SPEECH_GREETING, interrupt=True)
         self.timer.start(FRAME_INTERVAL_MS)
-
-    def _stop(self):
-        self.timer.stop()
-        if self.cap is not None:
-            self.cap.release()
-            self.cap = None
-        self.last_frame = None
-        self.combo.setEnabled(True)
-        self.btn_snap.setEnabled(False)
-        self._style_button(start=True)
-        self._set_status(running=False)
-        self._reset_panel()
-        self.video.setText("Đã dừng. Nhấn Bắt đầu để mở lại.")
 
     def _update_frame(self):
         ok, frame = self.cap.read()
         if not ok:
             return
         frame = cv2.flip(frame, 1)
-        self.last_frame = frame
-
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
         roi = None
@@ -265,58 +177,198 @@ class CurrencyApp(QWidget):
 
         probs = self.clf.predict_probs(Image.fromarray(region))
         self.prob_history.append(probs)
-        avg_probs = sum(self.prob_history) / len(self.prob_history)
-        pred = self.clf.resolve(avg_probs, topk=4)
-        accent = _accent_for(pred)
+        if len(self.prob_history) > SMOOTH_WINDOW:
+            self.prob_history.pop(0)
+        avg = sum(self.prob_history) / len(self.prob_history)
+        pred = self.clf.resolve(avg, topk=4)
         conf = pred.confidence
-        self.last_text = f"{pred.label} ({conf*100:.0f}%)"
+
+        self._process(rgb, region, roi, pred, conf)
+
+        # Khi đang quét / hiện kết quả: frame đã đóng băng, không vẽ live.
+        if self.state in (SCANNING, RESULT):
+            return
 
         if roi is not None:
-            cv2.rectangle(rgb, roi[:2], roi[2:], _hex_to_rgb(accent), 2)
+            cv2.rectangle(rgb, roi[:2], roi[2:], _hex_to_rgb(_accent_for(pred)), 3)
+        self._show_rgb(rgb)
 
-        self.lbl_denom.setText(pred.label)
-        self.lbl_denom.setStyleSheet(
-            f"color:{accent}; font-size:34px; font-weight:700;")
-        self.bar.setValue(int(conf * 100))
-        self._set_bar_color(accent)
-        self.lbl_pct.setText(f"{conf*100:.0f}%")
+    # ---------------- Máy trạng thái ----------------
 
-        for (name_lbl, pct_lbl), (name, prob) in zip(self.top_rows, pred.topk[1:4]):
-            name_lbl.setText(name)
-            pct_lbl.setText(f"{prob*100:.0f}%")
+    def _reset_capture(self):
+        self.anim_timer.stop()
+        self.state = SEARCHING
+        self.stable_cls = None
+        self.stable_streak = 0
+        self.best = None
+        self.captured_cls = None
+        self.absent = 0
+        self.scan_rgb = None
+        self.scan_roi = None
+        self.scan_pred = None
 
-        now = time.time()
-        self.fps = 0.9 * self.fps + 0.1 * (1.0 / max(now - self.prev_t, 1e-6))
-        self.prev_t = now
-        self.lbl_fps.setText(f"{self.fps:.0f} FPS")
+    def _process(self, rgb, region, roi, pred, conf):
+        stable = (pred.is_money and pred.is_confident
+                  and conf >= config.AUTO_STABLE_CONF)
 
-        h, w, _ = rgb.shape
-        qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888)
-        pix = QPixmap.fromImage(qimg).scaled(
-            self.video.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self.video.setPixmap(pix)
-
-    def _snapshot(self):
-        if self.last_frame is None:
+        # Frame đóng băng: chờ tờ tiền rời khung / đổi tờ để tiếp tục.
+        if self.state in (SCANNING, RESULT):
+            if not pred.is_money:
+                self.absent += 1
+                if self.state == RESULT and self.absent >= config.AUTO_REARM_FRAMES:
+                    self._go_next()
+            else:
+                self.absent = 0
+                if (self.state == RESULT and stable
+                        and pred.cls != self.captured_cls):
+                    self._resume_live()   # tờ khác -> quét lại từ đầu
             return
-        img = Image.fromarray(cv2.cvtColor(self.last_frame, cv2.COLOR_BGR2RGB))
-        d = ImageDraw.Draw(img)
-        tb = d.textbbox((0, 0), self.last_text, font=self.snap_font)
-        d.rectangle([10, 10, 10 + tb[2] - tb[0] + 16, 10 + tb[3] - tb[1] + 12],
-                    fill=(0, 0, 0))
-        d.text((18, 14), self.last_text, font=self.snap_font, fill=(52, 208, 88))
 
-        config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        name = f"snapshot_{datetime.now():%Y%m%d_%H%M%S}.png"
-        img.save(config.OUTPUT_DIR / name)
-        self.lbl_msg.setText(f"Đã lưu: outputs/{name}")
+        if stable:
+            if pred.cls == self.stable_cls:
+                self.stable_streak += 1
+            else:
+                self.stable_cls = pred.cls
+                self.stable_streak = 1
+                self.best = None
+            self._keep_best(rgb, region, roi, pred, conf)
+            self.state = GUIDING
+            self._render_guiding(conf)
+            if self.stable_streak >= config.AUTO_STABLE_FRAMES:
+                self._start_scan()
+        elif pred.is_money:
+            self.stable_cls = None
+            self.stable_streak = 0
+            self.best = None
+            self.state = GUIDING
+            self._render_guiding(conf)
+            self._maybe_guide()
+        else:
+            self.stable_cls = None
+            self.stable_streak = 0
+            self.best = None
+            self.state = SEARCHING
+            self._render_searching()
+
+    def _keep_best(self, rgb, region, roi, pred, conf):
+        gray = cv2.cvtColor(region, cv2.COLOR_RGB2GRAY)
+        sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
+        score = conf * sharpness
+        if self.best is None or score > self.best["score"]:
+            full_roi = roi if roi is not None else (
+                0, 0, rgb.shape[1], rgb.shape[0])
+            self.best = {"score": score, "rgb": rgb.copy(),
+                         "roi": full_roi, "pred": pred}
+
+    def _maybe_guide(self):
+        now = time.time()
+        if now - self.last_guide_t >= config.GUIDE_COOLDOWN_S:
+            self.last_guide_t = now
+            self.speaker.speak(config.SPEECH_GUIDE_HOLD)
+
+    # ---------------- Hiển thị từng trạng thái ----------------
+
+    def _render_searching(self):
+        self._set_overlay("ĐANG TÌM", "Đưa tờ tiền\nvào khung", "", NEUTRAL)
+
+    def _render_guiding(self, conf):
+        self._set_overlay("ĐANG NHẬN DIỆN", "Giữ yên…",
+                          f"{conf*100:.0f}%", AMBER)
+
+    # ---------------- Animation quét ----------------
+
+    def _start_scan(self):
+        self.scan_rgb = self.best["rgb"]
+        self.scan_roi = self.best["roi"]
+        self.scan_pred = self.best["pred"]
+        self.scan_progress = 0.0
+        self.state = SCANNING
+        speech.play_cue("scan")
+        self._set_overlay("ĐANG QUÉT", "", "", GREEN)
+        self.anim_timer.start(SCAN_INTERVAL_MS)
+
+    def _scan_step(self):
+        self.scan_progress = min(self.scan_progress + self.scan_speed, 1.0)
+        x1, y1, x2, y2 = self.scan_roi
+        y = int(y1 + (y2 - y1) * self.scan_progress)
+        green = (52, 208, 88)
+
+        img = self.scan_rgb.copy()
+        overlay = img.copy()
+        cv2.rectangle(overlay, (x1, y1), (x2, y), green, -1)
+        cv2.addWeighted(overlay, 0.18, img, 0.82, 0, img)
+        cv2.line(img, (x1, y), (x2, y), green, 3)
+        cv2.rectangle(img, (x1, y1), (x2, y2), green, 2)
+        self._show_rgb(img)
+
+        if self.scan_progress >= 1.0:
+            self.anim_timer.stop()
+            self._reveal()
+
+    def _reveal(self):
+        self.state = RESULT
+        pred = self.scan_pred
+        accent = _accent_for(pred)
+        x1, y1, x2, y2 = self.scan_roi
+
+        img = cv2.convertScaleAbs(self.scan_rgb, alpha=0.4)   # làm tối nền
+        img[y1:y2, x1:x2] = self.scan_rgb[y1:y2, x1:x2]       # giữ sáng tờ tiền
+        cv2.rectangle(img, (x1, y1), (x2, y2), _hex_to_rgb(accent), 3)
+        self._show_rgb(img)
+
+        self._set_overlay("KẾT QUẢ", pred.label,
+                          f"độ tin cậy {pred.confidence*100:.0f}%", accent)
+
+        self.captured_cls = pred.cls
+        self.absent = 0
+        self.last_result_speech = config.LABELS_SPEECH.get(pred.cls, pred.label)
+        speech.play_cue("ok")
+        self.speaker.speak(self.last_result_speech, interrupt=True)
+
+    def _resume_live(self):
+        self.anim_timer.stop()
+        self.state = SEARCHING
+        self.stable_cls = None
+        self.stable_streak = 0
+        self.best = None
+        self.captured_cls = None
+        self.absent = 0
+        self.scan_rgb = self.scan_roi = self.scan_pred = None
+
+    def _go_next(self):
+        self._resume_live()
+        self._render_searching()
+        self.speaker.speak(config.SPEECH_NEXT, interrupt=True)
+
+    # ---------------- Tương tác ----------------
+
+    def _repeat(self):
+        if self.last_result_speech and self.state == RESULT:
+            self.speaker.speak(self.last_result_speech, interrupt=True)
+        elif self.state == SEARCHING:
+            self.speaker.speak(config.SPEECH_GREETING, interrupt=True)
+        elif self.last_result_speech:
+            self.speaker.speak(self.last_result_speech, interrupt=True)
+
+    def mousePressEvent(self, event):
+        self._repeat()
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Escape:
+        key = event.key()
+        if key == Qt.Key_Escape:
             self.close()
+        elif key in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter):
+            self._repeat()
+        elif key == Qt.Key_F:
+            self.showNormal() if self.isFullScreen() else self.showFullScreen()
 
     def closeEvent(self, event):
-        self._stop()
+        self.timer.stop()
+        self.anim_timer.stop()
+        if self.cap is not None:
+            self.cap.release()
+            self.cap = None
+        self.speaker.stop()
         event.accept()
 
 

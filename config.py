@@ -62,6 +62,34 @@ UNCERTAIN_LABEL = "Không chắc chắn"
 ROI_RATIO = 0.6
 ROI_ASPECT = 2.2
 
+# --- Tự động chụp khoảnh khắc tốt nhất ---
+AUTO_STABLE_CONF = 0.75
+AUTO_STABLE_FRAMES = 6
+AUTO_REARM_FRAMES = 5
+
+# --- Giọng nói ---
+LABELS_SPEECH = {
+    "000000": "Không có tiền",
+    "001000": "Một nghìn đồng",
+    "002000": "Hai nghìn đồng",
+    "005000": "Năm nghìn đồng",
+    "010000": "Mười nghìn đồng",
+    "020000": "Hai mươi nghìn đồng",
+    "050000": "Năm mươi nghìn đồng",
+    "100000": "Một trăm nghìn đồng",
+    "200000": "Hai trăm nghìn đồng",
+    "500000": "Năm trăm nghìn đồng",
+}
+SPEECH_GREETING = "Sẵn sàng. Hãy đưa tờ tiền vào trước camera."
+SPEECH_GUIDE_HOLD = "Giữ yên, đang nhận diện."
+SPEECH_UNSURE = "Chưa rõ, bạn thử lại nhé."
+SPEECH_NEXT = "Đưa tờ tiếp theo."
+SPEECH_NO_CAMERA = "Không mở được camera."
+
+GUIDE_COOLDOWN_S = 2.5       # khoảng cách tối thiểu giữa hai câu dẫn hướng
+VOICE_NAME = "Linh"
+VOICE_RATE = 180
+
 FONT_CANDIDATES = [
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
     "/Library/Fonts/Arial Unicode.ttf",
