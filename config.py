@@ -90,6 +90,8 @@ SPEECH_NO_CAMERA = "Không mở được camera."
 GUIDE_COOLDOWN_S = 3       # khoảng cách tối thiểu giữa hai câu dẫn hướng
 VOICE_NAME = "Linh"
 VOICE_RATE = 180
+VOICE_EDGE = "vi-VN-HoaiMyNeural"
+VOICE_EDGE_RATE = "+0%"
 
 FONT_CANDIDATES = [
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
