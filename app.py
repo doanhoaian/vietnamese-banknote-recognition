@@ -313,12 +313,12 @@ class CurrencyApp(QWidget):
         cv2.rectangle(img, (x1, y1), (x2, y2), _hex_to_rgb(accent), 3)
         self._show_rgb(img)
 
-        self._set_overlay("KẾT QUẢ", pred.label,
-                          f"độ tin cậy {pred.confidence*100:.0f}%", accent)
+        self._set_overlay("KẾT QUẢ", pred.label, "", accent)
 
         self.captured_cls = pred.cls
         self.absent = 0
-        self.last_result_speech = config.LABELS_SPEECH.get(pred.cls, pred.label)
+        value = config.LABELS_SPEECH.get(pred.cls, pred.label)
+        self.last_result_speech = f"{config.SPEECH_SUCCESS_PREFIX} {value}"
         speech.play_cue("ok")
         self.speaker.speak(self.last_result_speech, interrupt=True)
 
@@ -335,7 +335,7 @@ class CurrencyApp(QWidget):
     def _go_next(self):
         self._resume_live()
         self._render_searching()
-        self.speaker.speak(config.SPEECH_NEXT, interrupt=True)
+        self.speaker.speak(config.SPEECH_NEXT, interrupt=False)
 
     # ---------------- Tương tác ----------------
 

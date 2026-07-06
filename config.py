@@ -81,12 +81,13 @@ LABELS_SPEECH = {
     "500000": "Năm trăm nghìn đồng",
 }
 SPEECH_GREETING = "Sẵn sàng. Hãy đưa tờ tiền vào trước camera."
+SPEECH_SUCCESS_PREFIX = "Đã nhận diện thành công"
 SPEECH_GUIDE_HOLD = "Giữ yên, đang nhận diện."
 SPEECH_UNSURE = "Chưa rõ, bạn thử lại nhé."
 SPEECH_NEXT = "Đưa tờ tiếp theo."
 SPEECH_NO_CAMERA = "Không mở được camera."
 
-GUIDE_COOLDOWN_S = 2.5       # khoảng cách tối thiểu giữa hai câu dẫn hướng
+GUIDE_COOLDOWN_S = 3       # khoảng cách tối thiểu giữa hai câu dẫn hướng
 VOICE_NAME = "Linh"
 VOICE_RATE = 180
 
