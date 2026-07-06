@@ -15,9 +15,9 @@ from inference import CurrencyClassifier
 from utils import center_roi
 
 # Màu theo trạng thái
-GREEN = "#34D058"      # chắc chắn
-AMBER = "#EF9F27"      # đang nhận diện / chưa chắc
-NEUTRAL = "#8b93a1"    # trung tính (đang tìm)
+GREEN = "#34D058"
+AMBER = "#EF9F27"
+NEUTRAL = "#8b93a1"
 BG = "#0e1117"
 
 FRAME_INTERVAL_MS = 15
@@ -25,11 +25,10 @@ SMOOTH_WINDOW = 8
 SCAN_INTERVAL_MS = 16
 SCAN_DURATION_MS = 1100
 
-# Các trạng thái của luồng trải nghiệm
-SEARCHING = "SEARCHING"    # chưa thấy tiền
-GUIDING = "GUIDING"        # thấy tiền, đang canh/giữ yên
-SCANNING = "SCANNING"      # đóng băng + animation quét
-RESULT = "RESULT"          # hiện & đọc kết quả
+SEARCHING = "SEARCHING"
+GUIDING = "GUIDING"
+SCANNING = "SCANNING"
+RESULT = "RESULT"
 
 
 def _hex_to_rgb(hex_color: str):
@@ -125,7 +124,7 @@ class CurrencyApp(QWidget):
         ov.addWidget(self.sub_lbl)
         ov.addStretch(1)
 
-        self.hint_lbl = QLabel("Chạm màn hình để nghe lại · Esc để thoát")
+        self.hint_lbl = QLabel("Esc để thoát")
         self.hint_lbl.setAlignment(Qt.AlignHCenter | Qt.AlignBottom)
         self.hint_lbl.setStyleSheet("color:#6b7280; font-size:14px;")
         ov.addWidget(self.hint_lbl, alignment=Qt.AlignHCenter)
@@ -185,7 +184,6 @@ class CurrencyApp(QWidget):
 
         self._process(rgb, region, roi, pred, conf)
 
-        # Khi đang quét / hiện kết quả: frame đã đóng băng, không vẽ live.
         if self.state in (SCANNING, RESULT):
             return
 
@@ -211,7 +209,6 @@ class CurrencyApp(QWidget):
         stable = (pred.is_money and pred.is_confident
                   and conf >= config.AUTO_STABLE_CONF)
 
-        # Frame đóng băng: chờ tờ tiền rời khung / đổi tờ để tiếp tục.
         if self.state in (SCANNING, RESULT):
             if not pred.is_money:
                 self.absent += 1
@@ -221,7 +218,7 @@ class CurrencyApp(QWidget):
                 self.absent = 0
                 if (self.state == RESULT and stable
                         and pred.cls != self.captured_cls):
-                    self._resume_live()   # tờ khác -> quét lại từ đầu
+                    self._resume_live()
             return
 
         if stable:
