@@ -36,6 +36,7 @@ class Speaker:
         self._q: "queue.Queue[str | None]" = queue.Queue()
         self._proc = None
         self._proc_lock = threading.Lock()
+        self._playing = False          # đang phát một câu (để biết đọc xong chưa)
         self._engine = None            
         self._win_ps1 = None           
         self._backend = self._pick_backend()
@@ -68,6 +69,9 @@ class Speaker:
         if interrupt:
             self._flush()
         self._q.put(text)
+
+    def is_speaking(self) -> bool:
+        return self._playing or not self._q.empty()
 
     def stop(self) -> None:
         self._flush()
@@ -105,13 +109,16 @@ class Speaker:
             text = self._q.get()
             if text is None:
                 return
+            self._playing = True
             print(f"[TTS] {text}")
+            self._playing = False
 
     def _run_say(self) -> None:
         while True:
             text = self._q.get()
             if text is None:
                 return
+            self._playing = True
             cmd = ["say", "-v", self.voice, "-r", str(self.rate), text]
             try:
                 with self._proc_lock:
@@ -119,6 +126,8 @@ class Speaker:
                 self._proc.wait()
             except Exception as exc:
                 print(f"[TTS lỗi] {exc}")
+            finally:
+                self._playing = False
 
     def _run_pyttsx3(self) -> None:
         engine = self._init_pyttsx3()
@@ -129,11 +138,14 @@ class Speaker:
             text = self._q.get()
             if text is None:
                 return
+            self._playing = True
             try:
                 engine.say(text)
                 engine.runAndWait()
             except Exception as exc:
                 print(f"[TTS lỗi] {exc}")
+            finally:
+                self._playing = False
 
     def _run_edgetts(self) -> None:
         import asyncio
@@ -149,6 +161,7 @@ class Speaker:
             if text is None:
                 self._cleanup_dir(tmp_dir)
                 return
+            self._playing = True
             mp3 = os.path.join(tmp_dir, "utt.mp3")
             try:
                 async def _synth():
@@ -156,13 +169,13 @@ class Speaker:
                 asyncio.run(_synth())
                 self._play_file(mp3)
             except Exception as exc:
-                # Mất mạng / edge-tts lỗi → tụt xuống pyttsx3 cho câu này.
                 if not warned:
                     print(f"[TTS] edge-tts không dùng được ({exc}), "
                           f"chuyển sang giọng offline.")
                     warned = True
                 self._say_with_pyttsx3(text)
             finally:
+                self._playing = False
                 try:
                     if os.path.exists(mp3):
                         os.remove(mp3)
@@ -217,7 +230,6 @@ class Speaker:
                 self._proc = subprocess.Popen(["afplay", mp3_path])
             self._proc.wait()
             return
-        # Linux: thử các trình phát dòng lệnh phổ biến.
         for name, base in _LINUX_PLAYERS:
             if shutil.which(name):
                 with self._proc_lock:

@@ -210,6 +210,9 @@ class CurrencyApp(QWidget):
                   and conf >= config.AUTO_STABLE_CONF)
 
         if self.state in (SCANNING, RESULT):
+            if self.state == RESULT and self.speaker.is_speaking():
+                self.absent = 0
+                return
             if not pred.is_money:
                 self.absent += 1
                 if self.state == RESULT and self.absent >= config.AUTO_REARM_FRAMES:
