@@ -213,15 +213,17 @@ class CurrencyApp(QWidget):
             if self.state == RESULT and self.speaker.is_speaking():
                 self.absent = 0
                 return
-            if not pred.is_money:
+            confident_money = pred.is_money and pred.is_confident
+            if not confident_money:
                 self.absent += 1
                 if self.state == RESULT and self.absent >= config.AUTO_REARM_FRAMES:
                     self._go_next()
             else:
-                self.absent = 0
                 if (self.state == RESULT and stable
                         and pred.cls != self.captured_cls):
                     self._resume_live()
+                else:
+                    self.absent = 0
             return
 
         if stable:
@@ -278,6 +280,7 @@ class CurrencyApp(QWidget):
     # ---------------- Animation quét ----------------
 
     def _start_scan(self):
+        self.prob_history.clear()
         self.scan_rgb = self.best["rgb"]
         self.scan_roi = self.best["roi"]
         self.scan_pred = self.best["pred"]

@@ -37,7 +37,6 @@ def _set_finetuning(net, unfreeze_last_n: int) -> None:
 
 
 def param_groups(net, head_lr: float, backbone_lr: float):
-    """Tách tham số head và backbone để áp learning rate riêng (discriminative)."""
     head, backbone = [], []
     for name, p in net.named_parameters():
         if not p.requires_grad:
